@@ -30,9 +30,10 @@ const char* password = "ilovefoosball";  // Replace with your Pi's AP password
 
 // API configuration
 const char* baseUrl = "http://192.168.4.1:3000";  // Replace with Pi's IP
-// String playerColor = "red";  // Change to "blue" for the other device
+// String playerColor = "red";
 String playerColor = "blue";
 
+String opponentColor = (playerColor == "red") ? "blue" : "red";
 
 // Global objects
 ESP8266WebServer server(80);
@@ -51,17 +52,14 @@ ButtonState buttonUp = {false, false, 0, false};
 ButtonState buttonDown = {false, false, 0, false};
 ButtonState buttonQuantum = {false, false, 0, false};
 
-bool laserBroken = false;
 bool lastLaserState = false;
 unsigned long lastLaserBreakTime = 0;
 bool quantumMode = false;
 
 // LED state variables
-bool ledStatusState = false;
 bool ledActivityState = false;
 unsigned long lastLedBlinkTime = 0;
 bool opponentScoreBlinking = false;
-int opponentBlinkCount = 0;
 unsigned long opponentBlinkStartTime = 0;
 
 // WiFi state
@@ -91,11 +89,13 @@ void setRGBColor(int red, int green, int blue);
 void setStatusColor(String status);
 void flashNetworkActivity();
 void updateNetworkActivityLED();
+void startupBlink();
+void sendTestOpponentScore();
 
 void setup() {
   Serial.begin(115200);
   Serial.println("FoosHack ESP8266 Starting...");
-  
+
   // Show startup status - Purple
   setStatusColor("startup");
 
@@ -106,7 +106,7 @@ void setup() {
   pinMode(BUTTON_QUANTUM_PIN, INPUT_PULLUP);
   pinMode(LED_ACTIVITY_PIN, OUTPUT);
   pinMode(LED_BUILTIN_PIN, OUTPUT);
-  
+
   // Initialize RGB LED pins
   pinMode(RGB_RED_PIN, OUTPUT);
   pinMode(RGB_GREEN_PIN, OUTPUT);
@@ -117,15 +117,19 @@ void setup() {
   digitalWrite(LED_BUILTIN_PIN, HIGH); // Built-in LED off (inverted logic)
   setRGBColor(0, 0, 0); // Turn off RGB LED
 
+  // Startup blink sequence - 3 blinks to confirm boot
+  Serial.println("Performing startup blink sequence...");
+  startupBlink();
+
   // Show connecting status - Yellow
   setStatusColor("connecting");
-  
+
   // Initialize WiFi
   setupWiFi();
 
   // Setup HTTP server endpoints
   setupServer();
-  
+
   // Show ready status - Player color
   setStatusColor("ready");
 
@@ -150,7 +154,7 @@ void loop() {
 
   // Update LED states
   updateLEDs();
-  
+
   // Update network activity LED
   updateNetworkActivityLED();
 
@@ -173,7 +177,7 @@ void setupWiFi() {
       setRGBColor(0, 0, 0); // Off
     }
     blinkState = !blinkState;
-    
+
     delay(500);
     Serial.print(".");
     attempts++;
@@ -184,6 +188,11 @@ void setupWiFi() {
     Serial.println();
     Serial.print("Connected! IP address: ");
     Serial.println(WiFi.localIP());
+
+    // Wait 5 seconds then send test opponent score
+    Serial.println("Waiting 5 seconds before sending test opponent score...");
+    delay(5000);
+    sendTestOpponentScore();
   } else {
     wifiConnected = false;
     Serial.println();
@@ -195,10 +204,10 @@ void setupServer() {
   // Endpoint to receive opponent score notifications
   server.on("/scoreMade", HTTP_POST, []() {
     Serial.println("=== INCOMING API: /scoreMade ===");
-    
+
     // Flash network activity LED for incoming data
     flashNetworkActivity();
-    
+
     String body = server.arg("plain");
     Serial.print("Request body: ");
     Serial.println(body);
@@ -207,7 +216,7 @@ void setupServer() {
     JsonDocument doc;
     deserializeJson(doc, body);
     String scoringPlayer = doc["player"];
-    
+
     Serial.print("Scoring player: ");
     Serial.println(scoringPlayer);
     Serial.print("This device player: ");
@@ -228,10 +237,10 @@ void setupServer() {
   // Status endpoint
   server.on("/status", HTTP_GET, []() {
     Serial.println("=== INCOMING API: /status ===");
-    
+
     // Flash network activity LED for incoming data
     flashNetworkActivity();
-    
+
     JsonDocument doc;
     doc["player"] = playerColor;
     doc["wifi"] = wifiConnected;
@@ -239,10 +248,10 @@ void setupServer() {
 
     String response;
     serializeJson(doc, response);
-    
+
     Serial.print("Sending status response: ");
     Serial.println(response);
-    
+
     server.send(200, "application/json", response);
     Serial.println("Status request completed");
   });
@@ -256,14 +265,14 @@ void setupServer() {
 
 void handleWiFi() {
   unsigned long currentTime = millis();
-  
+
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       // Just disconnected
       wifiConnected = false;
       setStatusColor("disconnected");
     }
-    
+
     // Check if we're in reconnection mode
     if (currentTime - lastWifiRetry < WIFI_RETRY_DELAY_MS) {
       // Blink yellow while trying to reconnect
@@ -342,14 +351,14 @@ void handleLaserBreak() {
   // Detect laser break (transition from unbroken to broken)
   if (currentLaserState && !lastLaserState) {
     Serial.print("Laser break detected! Checking cooldown... ");
-    
+
     // Check cooldown period
     if (currentTime - lastLaserBreakTime > LASER_COOLDOWN_MS) {
       Serial.println("GOAL CONFIRMED! Sending API call.");
       Serial.print("Time since last goal: ");
       Serial.print(currentTime - lastLaserBreakTime);
       Serial.println("ms");
-      
+
       sendGoalAPI();
       lastLaserBreakTime = currentTime;
 
@@ -448,7 +457,7 @@ void triggerOpponentScoreBlink() {
 
 void sendGoalAPI() {
   Serial.println("=== SENDING GOAL API ===");
-  
+
   if (!wifiConnected) {
     Serial.println("ERROR: WiFi not connected, cannot send goal API");
     return;
@@ -459,25 +468,27 @@ void sendGoalAPI() {
 
   Serial.print("Connecting to: ");
   Serial.println(String(baseUrl) + "/score");
-  
+
   httpClient.begin(wifiClient, String(baseUrl) + "/score");
   httpClient.addHeader("Content-Type", "application/json");
   // httpClient.addHeader("X-API-Key", "your_api_key"); // Update with actual key
 
   JsonDocument doc;
-  doc["player"] = playerColor;
+  doc["player"] = opponentColor;
 
   String payload;
   serializeJson(doc, payload);
-  
+
   Serial.print("Sending payload: ");
   Serial.println(payload);
+  Serial.print("Opponent scored against player: ");
+  Serial.println(playerColor);
 
   int httpResponseCode = httpClient.POST(payload);
 
   Serial.print("HTTP Response Code: ");
   Serial.println(httpResponseCode);
-  
+
   if (httpResponseCode > 0) {
     String response = httpClient.getString();
     Serial.print("Server Response: ");
@@ -587,6 +598,75 @@ void sendAddPointAPI(int amount) {
   }
 
   httpClient.end();
+}
+
+void sendTestOpponentScore() {
+  Serial.println("=== SENDING TEST OPPONENT SCORE ===");
+
+  if (!wifiConnected) {
+    Serial.println("ERROR: WiFi not connected, cannot send test opponent score");
+    return;
+  }
+
+  // Flash network activity LED for outgoing data
+  flashNetworkActivity();
+
+  Serial.print("This device player: ");
+  Serial.println(playerColor);
+  Serial.print("Simulating opponent: ");
+  Serial.println(opponentColor);
+  Serial.print("Connecting to: ");
+  Serial.println(String(baseUrl) + "/scoreMade");
+
+  httpClient.begin(wifiClient, String(baseUrl) + "/scoreMade");
+  httpClient.addHeader("Content-Type", "application/json");
+
+  JsonDocument doc;
+  doc["player"] = opponentColor;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  Serial.print("Sending test payload: ");
+  Serial.println(payload);
+
+  int httpResponseCode = httpClient.POST(payload);
+
+  Serial.print("HTTP Response Code: ");
+  Serial.println(httpResponseCode);
+
+  if (httpResponseCode > 0) {
+    String response = httpClient.getString();
+    Serial.print("Server Response: ");
+    Serial.println(response);
+  } else {
+    Serial.print("HTTP Error: ");
+    Serial.println(httpResponseCode);
+  }
+
+  httpClient.end();
+  Serial.println("Test opponent score API call completed");
+  Serial.println("This should trigger the LED blink sequence if successful!");
+}
+
+void startupBlink() {
+  Serial.println("Starting LED activity pin blink sequence (3 blinks)");
+
+  for (int i = 0; i < 3; i++) {
+    Serial.print("Blink ");
+    Serial.print(i + 1);
+    Serial.println(" - ON");
+    digitalWrite(LED_ACTIVITY_PIN, HIGH);
+    delay(200);
+
+    Serial.print("Blink ");
+    Serial.print(i + 1);
+    Serial.println(" - OFF");
+    digitalWrite(LED_ACTIVITY_PIN, LOW);
+    delay(200);
+  }
+
+  Serial.println("Startup blink sequence completed");
 }
 
 void sendResetAPI() {
