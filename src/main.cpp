@@ -4,6 +4,7 @@
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
+#include "fooshack_logic.h"
 
 // Pin definitions
 #define LASER_BREAK_PIN 14
@@ -326,22 +327,16 @@ void updateButton(ButtonState* button, int pin) {
     Serial.println(reading ? "PRESSED" : "RELEASED");
   }
 
-  if ((currentTime - button->lastDebounceTime) > BUTTON_DEBOUNCE_MS) {
-    if (reading != button->currentState) {
-      button->currentState = reading;
-
-      if (button->currentState) {
-        button->pressed = true;
-        Serial.print("Button CONFIRMED PRESS on pin ");
-        Serial.print(pin);
-        Serial.print(" after debounce (");
-        Serial.print(currentTime - button->lastDebounceTime);
-        Serial.println("ms)");
-      }
-    }
+  // Use tested logic for button state updates
+  FooshackLogic::updateButtonState(button, reading, currentTime);
+  
+  if (button->pressed) {
+    Serial.print("Button CONFIRMED PRESS on pin ");
+    Serial.print(pin);
+    Serial.print(" after debounce (");
+    Serial.print(currentTime - button->lastDebounceTime);
+    Serial.println("ms)");
   }
-
-  button->lastState = reading;
 }
 
 void handleLaserBreak() {
@@ -357,28 +352,24 @@ void handleLaserBreak() {
     Serial.println(")");
   }
 
-  // Detect laser break (transition from unbroken to broken)
-  if (currentLaserState && !lastLaserState) {
-    Serial.print("Laser break detected! Checking cooldown... ");
+  // Use tested logic to determine if goal should trigger
+  if (FooshackLogic::shouldTriggerGoal(currentLaserState, lastLaserState, lastLaserBreakTime, currentTime)) {
+    Serial.println("GOAL CONFIRMED! Sending API call.");
+    Serial.print("Time since last goal: ");
+    Serial.print(currentTime - lastLaserBreakTime);
+    Serial.println("ms");
 
-    // Check cooldown period
-    if (currentTime - lastLaserBreakTime > LASER_COOLDOWN_MS) {
-      Serial.println("GOAL CONFIRMED! Sending API call.");
-      Serial.print("Time since last goal: ");
-      Serial.print(currentTime - lastLaserBreakTime);
-      Serial.println("ms");
+    sendGoalAPI();
+    lastLaserBreakTime = currentTime;
 
-      sendGoalAPI();
-      lastLaserBreakTime = currentTime;
-
-      // Trigger 2-second solid LED flash
-      Serial.println("Triggering 2-second solid LED flash for goal");
-      triggerGoalFlash();
-    } else {
-      Serial.print("Goal ignored - still in cooldown period. Time remaining: ");
-      Serial.print(LASER_COOLDOWN_MS - (currentTime - lastLaserBreakTime));
-      Serial.println("ms");
-    }
+    // Trigger 2-second solid LED flash
+    Serial.println("Triggering 2-second solid LED flash for goal");
+    triggerGoalFlash();
+  } else if (currentLaserState && !lastLaserState) {
+    // Goal detected but blocked by cooldown
+    Serial.print("Goal ignored - still in cooldown period. Time remaining: ");
+    Serial.print(LASER_COOLDOWN_MS - (currentTime - lastLaserBreakTime));
+    Serial.println("ms");
   }
 
   lastLaserState = currentLaserState;
@@ -487,11 +478,8 @@ void sendGoalAPI() {
   httpClient.begin(wifiClient, String(baseUrl) + "/score");
   httpClient.addHeader("Content-Type", "application/json");
 
-  JsonDocument doc;
-  doc["player"] = opponentColor;
-
-  String payload;
-  serializeJson(doc, payload);
+  // Use tested logic to create goal payload
+  String payload = FooshackLogic::createGoalPayload(opponentColor);
 
   Serial.print("Sending payload: ");
   Serial.println(payload);
@@ -593,13 +581,8 @@ void sendAddPointAPI(int amount) {
   httpClient.begin(wifiClient, String(baseUrl) + "/point");
   httpClient.addHeader("Content-Type", "application/json");
 
-  JsonDocument doc;
-  doc["player"] = playerColor;
-  doc["amount"] = amount;
-  doc["quantum"] = quantumMode;
-
-  String payload;
-  serializeJson(doc, payload);
+  // Use tested logic to create point payload
+  String payload = FooshackLogic::createPointPayload(playerColor, amount, quantumMode);
 
   int httpResponseCode = httpClient.POST(payload);
 
@@ -694,11 +677,8 @@ void sendResetAPI() {
   httpClient.begin(wifiClient, String(baseUrl) + "/reset");
   httpClient.addHeader("Content-Type", "application/json");
 
-  JsonDocument doc;
-  doc["player"] = playerColor;
-
-  String payload;
-  serializeJson(doc, payload);
+  // Use tested logic to create reset payload
+  String payload = FooshackLogic::createResetPayload(playerColor);
 
   int httpResponseCode = httpClient.POST(payload);
 
