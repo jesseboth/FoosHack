@@ -20,9 +20,10 @@
 
 // Timing constants
 #define BUTTON_DEBOUNCE_MS 500
-#define LASER_COOLDOWN_MS 5000
+#define LASER_COOLDOWN_MS 2000
 #define WIFI_RETRY_DELAY_MS 5000
 #define LED_BLINK_INTERVAL_MS 250
+#define OWN_GOAL_BLINK_INTERVAL_MS 250
 
 // WiFi credentials - UPDATE THESE
 const char* ssid = "Foosball_Table";  // Replace with your Pi's AP SSID
@@ -59,8 +60,10 @@ bool quantumMode = false;
 // LED state variables
 bool ledActivityState = false;
 unsigned long lastLedBlinkTime = 0;
-bool opponentScoreBlinking = false;
-unsigned long opponentBlinkStartTime = 0;
+bool ownGoalBlinking = false;
+unsigned long ownGoalBlinkStartTime = 0;
+bool goalFlashing = false;
+unsigned long goalFlashStartTime = 0;
 
 // WiFi state
 bool wifiConnected = false;
@@ -81,7 +84,8 @@ void updateButton(ButtonState* button, int pin);
 void handleLaserBreak();
 void handleButtonActions();
 void updateLEDs();
-void triggerOpponentScoreBlink();
+void triggerOwnGoalBlink();
+void triggerGoalFlash();
 void sendGoalAPI();
 void sendAddPointAPI(int amount);
 void sendResetAPI();
@@ -222,12 +226,12 @@ void setupServer() {
     Serial.print("This device player: ");
     Serial.println(playerColor);
 
-    // If opponent scored, trigger LED blinking
-    if (scoringPlayer != playerColor) {
-      Serial.println("OPPONENT SCORED! Triggering LED blink sequence");
-      triggerOpponentScoreBlink();
+    // Handle own goal celebration
+    if (scoringPlayer == playerColor) {
+      Serial.println("THIS PLAYER SCORED! Triggering celebration blink sequence");
+      triggerOwnGoalBlink();
     } else {
-      Serial.println("This player scored - no LED action needed");
+      Serial.println("Opponent scored - no action needed (goal flash already handled by defending side)");
     }
 
     server.send(200, "application/json", "{}");
@@ -362,11 +366,9 @@ void handleLaserBreak() {
       sendGoalAPI();
       lastLaserBreakTime = currentTime;
 
-      // Flash activity LED
-      Serial.println("Flashing activity LED for goal");
-      digitalWrite(LED_ACTIVITY_PIN, HIGH);
-      delay(100);
-      digitalWrite(LED_ACTIVITY_PIN, LOW);
+      // Trigger 2-second solid LED flash
+      Serial.println("Triggering 2-second solid LED flash for goal");
+      triggerGoalFlash();
     } else {
       Serial.print("Goal ignored - still in cooldown period. Time remaining: ");
       Serial.print(LASER_COOLDOWN_MS - (currentTime - lastLaserBreakTime));
@@ -434,26 +436,34 @@ void handleButtonActions() {
 void updateLEDs() {
   unsigned long currentTime = millis();
 
-  // Activity LED - Opponent score blinking
-  if (opponentScoreBlinking) {
-    if (currentTime - opponentBlinkStartTime < 3000) { // Blink for 3 seconds
-      if (currentTime - lastLedBlinkTime > 150) { // Fast blink
+  // Priority order: Goal flash > Own goal blinking
+  
+  // 1. Goal flash (solid LED for 2 seconds after laser break)
+  if (goalFlashing) {
+    if (currentTime - goalFlashStartTime < 2000) { // Flash for 2 seconds
+      digitalWrite(LED_ACTIVITY_PIN, HIGH); // Solid ON
+    } else {
+      goalFlashing = false;
+      digitalWrite(LED_ACTIVITY_PIN, LOW);
+    }
+    return; // Skip other LED states while goal flashing
+  }
+
+  // 2. Own goal celebration blinking (250ms intervals for 2 seconds)
+  if (ownGoalBlinking) {
+    if (currentTime - ownGoalBlinkStartTime < 2000) { // Blink for 2 seconds
+      if (currentTime - lastLedBlinkTime > OWN_GOAL_BLINK_INTERVAL_MS) { // 250ms intervals
         ledActivityState = !ledActivityState;
         digitalWrite(LED_ACTIVITY_PIN, ledActivityState);
         lastLedBlinkTime = currentTime;
       }
     } else {
-      opponentScoreBlinking = false;
+      ownGoalBlinking = false;
       digitalWrite(LED_ACTIVITY_PIN, LOW);
     }
   }
 }
 
-void triggerOpponentScoreBlink() {
-  Serial.println("Opponent scored! Triggering LED blink");
-  opponentScoreBlinking = true;
-  opponentBlinkStartTime = millis();
-}
 
 void sendGoalAPI() {
   Serial.println("=== SENDING GOAL API ===");
@@ -698,4 +708,16 @@ void sendResetAPI() {
   }
 
   httpClient.end();
+}
+
+void triggerOwnGoalBlink() {
+  Serial.println("Own goal scored! Triggering celebration LED blink");
+  ownGoalBlinking = true;
+  ownGoalBlinkStartTime = millis();
+}
+
+void triggerGoalFlash() {
+  Serial.println("Triggering goal flash - solid LED for 2 seconds");
+  goalFlashing = true;
+  goalFlashStartTime = millis();
 }
