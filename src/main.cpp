@@ -174,11 +174,13 @@ void setupWiFi() {
   int attempts = 0;
   bool blinkState = false;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    // Blink yellow while connecting
+    // Blink RGB LED yellow and activity LED while connecting
     if (blinkState) {
       setRGBColor(255, 255, 0); // Yellow on
+      digitalWrite(LED_ACTIVITY_PIN, HIGH); // Activity LED on
     } else {
-      setRGBColor(0, 0, 0); // Off
+      setRGBColor(0, 0, 0); // RGB off
+      digitalWrite(LED_ACTIVITY_PIN, LOW); // Activity LED off
     }
     blinkState = !blinkState;
 
@@ -186,6 +188,9 @@ void setupWiFi() {
     Serial.print(".");
     attempts++;
   }
+
+  // Turn off activity LED after connection attempt
+  digitalWrite(LED_ACTIVITY_PIN, LOW);
 
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
@@ -481,7 +486,6 @@ void sendGoalAPI() {
 
   httpClient.begin(wifiClient, String(baseUrl) + "/score");
   httpClient.addHeader("Content-Type", "application/json");
-  // httpClient.addHeader("X-API-Key", "your_api_key"); // Update with actual key
 
   JsonDocument doc;
   doc["player"] = opponentColor;
@@ -588,7 +592,6 @@ void sendAddPointAPI(int amount) {
 
   httpClient.begin(wifiClient, String(baseUrl) + "/point");
   httpClient.addHeader("Content-Type", "application/json");
-  httpClient.addHeader("X-API-Key", "your_api_key"); // Update with actual key
 
   JsonDocument doc;
   doc["player"] = playerColor;
@@ -690,7 +693,6 @@ void sendResetAPI() {
 
   httpClient.begin(wifiClient, String(baseUrl) + "/reset");
   httpClient.addHeader("Content-Type", "application/json");
-  httpClient.addHeader("X-API-Key", "your_api_key"); // Update with actual key
 
   JsonDocument doc;
   doc["player"] = playerColor;
